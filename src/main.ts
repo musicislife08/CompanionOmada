@@ -14,6 +14,7 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	private deviceCache: Map<string, OmadaDevice> = new Map()
 	private switchDetailsCache: Map<string, any> = new Map() // Cache switch details for PoE status
 	private reconnectTimeout?: NodeJS.Timeout
+	private confirmationTimeouts: Map<string, NodeJS.Timeout> = new Map() // Delayed confirmations after PoE toggle
 
 	/**
 	 * Initialize the module instance
@@ -187,6 +188,62 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	}
 
 	/**
+	 * Toggle PoE on a port with optimistic update and delayed confirmation
+	 * This provides instant feedback while waiting for hardware to catch up
+	 */
+	async togglePortPoe(deviceMac: string, portNumber: number, enablePoe: boolean): Promise<void> {
+		if (!this.client) {
+			throw new Error('Client not initialized')
+		}
+
+		try {
+			// Send the toggle command
+			await this.client.updatePortPoe(deviceMac, portNumber, enablePoe)
+
+			// Optimistically update the cached state immediately
+			const switchDetails = this.switchDetailsCache.get(deviceMac)
+			if (switchDetails) {
+				const port = switchDetails.ports?.find((p: any) => p.port === portNumber)
+				if (port && port.portStatus) {
+					port.portStatus.poe = enablePoe
+					this.log('debug', `Optimistically updated port ${portNumber} PoE to ${enablePoe}`)
+				}
+			}
+
+			// Update feedbacks immediately with the optimistic state
+			this.checkFeedbacks()
+
+			// Clear any existing confirmation timeout for this port
+			const timeoutKey = `${deviceMac}:${portNumber}`
+			const existingTimeout = this.confirmationTimeouts.get(timeoutKey)
+			if (existingTimeout) {
+				clearTimeout(existingTimeout)
+			}
+
+			// Schedule a confirmation refresh in 3 seconds to get actual hardware state
+			const confirmTimeout = setTimeout(async () => {
+				this.log('debug', `Confirming PoE state for port ${portNumber}...`)
+				try {
+					const details = await this.client!.getSwitchDetails(deviceMac)
+					this.switchDetailsCache.set(deviceMac, details)
+					this.checkFeedbacks()
+					this.log('debug', `Confirmed PoE state for port ${portNumber}`)
+				} catch (error) {
+					this.log('warn', `Failed to confirm PoE state: ${(error as Error).message}`)
+				}
+				this.confirmationTimeouts.delete(timeoutKey)
+			}, 3000) // 3 second delay
+
+			this.confirmationTimeouts.set(timeoutKey, confirmTimeout)
+		} catch (error) {
+			// If toggle failed, refresh immediately to get correct state
+			this.log('error', `Failed to toggle PoE: ${(error as Error).message}`)
+			await this.refreshDevices()
+			throw error
+		}
+	}
+
+	/**
 	 * Clean up when module is destroyed
 	 */
 	async destroy(): Promise<void> {
@@ -199,6 +256,12 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 		if (this.reconnectTimeout) {
 			clearTimeout(this.reconnectTimeout)
 		}
+
+		// Clear all confirmation timeouts
+		for (const timeout of this.confirmationTimeouts.values()) {
+			clearTimeout(timeout)
+		}
+		this.confirmationTimeouts.clear()
 
 		// Logout from controller
 		if (this.client) {

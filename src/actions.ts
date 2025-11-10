@@ -129,11 +129,8 @@ async function handlePoeAction(
 			`${enablePoe ? 'Enabling' : 'Disabling'} PoE on port ${portNumber} of device ${deviceMac}`
 		)
 
-		// Call API to update PoE
-		await instance.client.updatePortPoe(deviceMac, portNumber, enablePoe)
-
-		// Refresh devices to update feedbacks
-		await instance.refreshDevices()
+		// Use togglePortPoe which handles optimistic update and delayed confirmation
+		await instance.togglePortPoe(deviceMac, portNumber, enablePoe)
 
 		instance.log('info', `PoE ${enablePoe ? 'enabled' : 'disabled'} successfully`)
 	} catch (error) {
@@ -169,11 +166,8 @@ async function handlePoeToggle(instance: OmadaModuleInstance, event: CompanionAc
 
 		instance.log('info', `Toggling PoE on port ${portNumber} of device ${deviceMac} (${currentState} -> ${newState})`)
 
-		// Call API to update PoE
-		await instance.client.updatePortPoe(deviceMac, portNumber, newState)
-
-		// Refresh devices to update feedbacks
-		await instance.refreshDevices()
+		// Use togglePortPoe which handles optimistic update and delayed confirmation
+		await instance.togglePortPoe(deviceMac, portNumber, newState)
 
 		instance.log('info', `PoE toggled to ${newState ? 'enabled' : 'disabled'}`)
 	} catch (error) {

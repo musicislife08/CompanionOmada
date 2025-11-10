@@ -317,8 +317,30 @@ export class OmadaClient {
 	}
 
 	/**
+	 * Get port profile configuration
+	 */
+	async getPortProfile(profileId: string): Promise<any> {
+		try {
+			const response = await this.http.get(
+				`/${this.controllerId}/api/v2/sites/${this.siteId}/setting/lan/profiles/${profileId}`
+			)
+
+			if (response.data?.errorCode !== 0) {
+				throw new Error(response.data?.msg || 'Failed to get port profile')
+			}
+
+			return response.data.result
+		} catch (error) {
+			const err = error as AxiosError
+			this.log('error', `getPortProfile error: ${err.message}`)
+			throw error
+		}
+	}
+
+	/**
 	 * Enable or disable PoE on a switch port
 	 * OC200 requires profileOverrideEnable and full port config
+	 * We fetch the profile settings and only override the PoE field
 	 */
 	async updateSwitchPortPoe(deviceMac: string, portNumber: number, enablePoe: boolean): Promise<void> {
 		try {
@@ -332,29 +354,36 @@ export class OmadaClient {
 				throw new Error(`Port ${portNumber} not found on switch ${deviceMac}`)
 			}
 
-			// OC200 requires full port config with profileOverrideEnable
+			// Get the port profile to use its settings (except PoE which we're overriding)
+			const profile = await this.getPortProfile(port.profileId)
+
+			// Build port config using profile settings but overriding PoE
+			const portConfig = {
+				name: port.name,
+				profileId: port.profileId,
+				profileOverrideEnable: true, // Enable overrides
+				dhcpL2RelaySettings: profile.dhcpL2RelaySettings || { enable: false },
+				operation: profile.operation || 'switching',
+				linkSpeed: profile.linkSpeed ?? 0,
+				duplex: profile.duplex ?? 0,
+				topoNotifyEnable: profile.topoNotifyEnable ?? false,
+				poe: enablePoe ? 1 : 0, // 0 = OFF, 1 = ON (this is the override)
+				dot1x: profile.dot1x ?? 2,
+				bandWidthCtrlType: profile.bandWidthCtrlType ?? 0,
+				loopbackDetectEnable: profile.loopbackDetectEnable ?? false,
+				spanningTreeEnable: profile.spanningTreeEnable ?? false,
+				loopbackDetectVlanBasedEnable: profile.loopbackDetectVlanBasedEnable ?? false,
+				portIsolationEnable: profile.portIsolationEnable ?? false,
+				flowControlEnable: profile.flowControlEnable ?? false,
+				eeeEnable: profile.eeeEnable ?? false,
+				lldpMedEnable: profile.lldpMedEnable ?? true,
+			}
+
+			this.log('debug', `Using profile "${profile.name || 'unknown'}" settings with PoE override`)
+
 			const response = await this.http.patch(
 				`/${this.controllerId}/api/v2/sites/${this.siteId}/switches/${deviceMac}/ports/${portNumber}`,
-				{
-					name: port.name,
-					profileId: port.profileId,
-					profileOverrideEnable: true,
-					dhcpL2RelaySettings: { enable: false },
-					operation: 'switching',
-					linkSpeed: 0,
-					duplex: 0,
-					topoNotifyEnable: false,
-					poe: enablePoe ? 1 : 0, // 0 = OFF, 1 = ON
-					dot1x: 2,
-					bandWidthCtrlType: 0,
-					loopbackDetectEnable: false,
-					spanningTreeEnable: false,
-					loopbackDetectVlanBasedEnable: false,
-					portIsolationEnable: false,
-					flowControlEnable: false,
-					eeeEnable: false,
-					lldpMedEnable: true,
-				}
+				portConfig
 			)
 
 			if (response.data?.errorCode !== 0) {
