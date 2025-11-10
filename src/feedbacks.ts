@@ -41,7 +41,7 @@ export function UpdateFeedbacks(instance: OmadaModuleInstance): void {
 					tooltip: 'Port number to monitor',
 				},
 			],
-			callback: async (feedback: CompanionFeedbackBooleanEvent): Promise<boolean> => {
+			callback: (feedback: CompanionFeedbackBooleanEvent): boolean => {
 				return handlePoeStateFeedback(instance, feedback)
 			},
 		},
@@ -77,7 +77,7 @@ export function UpdateFeedbacks(instance: OmadaModuleInstance): void {
 					tooltip: 'Port number to monitor',
 				},
 			],
-			callback: async (feedback: CompanionFeedbackBooleanEvent): Promise<boolean> => {
+			callback: (feedback: CompanionFeedbackBooleanEvent): boolean => {
 				return handlePoeStateOffFeedback(instance, feedback)
 			},
 		},
@@ -89,12 +89,12 @@ export function UpdateFeedbacks(instance: OmadaModuleInstance): void {
 /**
  * Handle PoE state feedback (returns true when PoE is ON)
  */
-async function handlePoeStateFeedback(
+function handlePoeStateFeedback(
 	instance: OmadaModuleInstance,
 	feedback: CompanionFeedbackBooleanEvent
-): Promise<boolean> {
-	// Parse variables in device MAC
-	const deviceMac = await instance.parseVariablesInString(String(feedback.options.device_mac))
+): boolean {
+	// Variables are automatically parsed by Companion when useVariables: true
+	const deviceMac = String(feedback.options.device_mac)
 	const portNumber = Number(feedback.options.port)
 
 	// Check if PoE is enabled
@@ -104,12 +104,12 @@ async function handlePoeStateFeedback(
 /**
  * Handle PoE state OFF feedback (returns true when PoE is OFF)
  */
-async function handlePoeStateOffFeedback(
+function handlePoeStateOffFeedback(
 	instance: OmadaModuleInstance,
 	feedback: CompanionFeedbackBooleanEvent
-): Promise<boolean> {
-	// Parse variables in device MAC
-	const deviceMac = await instance.parseVariablesInString(String(feedback.options.device_mac))
+): boolean {
+	// Variables are automatically parsed by Companion when useVariables: true
+	const deviceMac = String(feedback.options.device_mac)
 	const portNumber = Number(feedback.options.port)
 
 	// Check if PoE is disabled (inverse of enabled)
