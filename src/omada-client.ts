@@ -135,8 +135,11 @@ export class OmadaClient {
 	 */
 	async resolveSiteKey(): Promise<void> {
 		try {
-			this.log('debug', 'Getting user info to resolve site key...')
+			this.log('debug', `Resolving site key for: "${this.siteId}"`)
 			const response = await this.http.get(`/${this.controllerId}/api/v2/users/current`)
+
+			this.log('debug', `User info response status: ${response.status}`)
+			this.log('debug', `User info errorCode: ${response.data?.errorCode}`)
 
 			if (response.data?.errorCode !== 0) {
 				throw new Error(response.data?.msg || 'Failed to get user info')
@@ -144,13 +147,17 @@ export class OmadaClient {
 
 			const userSites = response.data.result.privilege.sites || []
 			this.log('debug', `Found ${userSites.length} sites in user privileges`)
+			userSites.forEach((s: any) => {
+				this.log('debug', `  Site: "${s.name}" -> Key: "${s.key}"`)
+			})
 
 			// Find the matching site by name
 			const matchingSite = userSites.find((s: any) => s.name === this.siteId)
 			if (matchingSite) {
 				const siteKey = matchingSite.key
-				this.log('debug', `Resolved site "${this.siteId}" to key: ${siteKey}`)
+				this.log('info', `Resolved site "${this.siteId}" to key: ${siteKey}`)
 				this.siteId = siteKey
+				this.log('debug', `this.siteId is now: ${this.siteId}`)
 			} else {
 				// If no match found, log available sites and keep siteId as-is
 				// (might already be a site key, or using software controller)
@@ -161,6 +168,10 @@ export class OmadaClient {
 		} catch (error) {
 			const err = error as AxiosError
 			this.log('error', `resolveSiteKey error: ${err.message}`)
+			if (err.response) {
+				this.log('error', `Response status: ${err.response.status}`)
+				this.log('error', `Response data type: ${typeof err.response.data}`)
+			}
 			// Keep siteId as-is if we can't get user info
 		}
 	}
@@ -191,11 +202,14 @@ export class OmadaClient {
 	async getDevices(): Promise<OmadaDevice[]> {
 		try {
 			this.log('debug', `Getting devices from site: ${this.siteId}`)
+			this.log('debug', `Devices URL: /${this.controllerId}/api/v2/sites/${this.siteId}/devices`)
+
 			const response = await this.http.get(
 				`/${this.controllerId}/api/v2/sites/${this.siteId}/devices`
 			)
 
 			this.log('debug', `API Response status: ${response.status}`)
+			this.log('debug', `API Response content-type: ${response.headers['content-type']}`)
 
 			// Check if response has errorCode field (some API versions may not)
 			if (response.data?.errorCode !== undefined && response.data?.errorCode !== 0) {
@@ -231,6 +245,9 @@ export class OmadaClient {
 			} else {
 				this.log('debug', `Response type: ${typeof response.data}, isArray: ${Array.isArray(response.data)}`)
 				this.log('debug', `Response data type: ${response.data?.constructor?.name}`)
+				if (typeof response.data === 'string') {
+					this.log('debug', `Response is string, first 200 chars: ${response.data.substring(0, 200)}`)
+				}
 			}
 
 			this.log('debug', `Retrieved ${devices.length} devices`)
