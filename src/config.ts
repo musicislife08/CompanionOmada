@@ -53,7 +53,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			required: true,
 		},
 		{
-			type: 'textinput',
+			type: 'secret-text',
 			id: 'password',
 			label: 'Password',
 			tooltip: 'Local administrator password',

@@ -1,6 +1,6 @@
 {
 	"name": "companion-module-tplink-omada",
-	"version": "1.0.6",
+	"version": "1.0.7",
 	"description": "Bitfocus Companion module for TP-Link Omada controller PoE management",
 	"main": "dist/main.js",
 	"scripts": {
