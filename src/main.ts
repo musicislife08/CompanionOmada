@@ -220,8 +220,8 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 				clearTimeout(existingTimeout)
 			}
 
-			// Schedule a confirmation refresh in 15 seconds to get actual hardware state
-			// (Hardware can take 8-12 seconds to apply PoE changes)
+			// Schedule a confirmation refresh in 30 seconds to get actual hardware state
+			// (Omada hardware can be slow, taking 8-12+ seconds to apply PoE changes)
 			const confirmTimeout = setTimeout(async () => {
 				this.log('debug', `Confirming PoE state for port ${portNumber}...`)
 				try {
@@ -233,7 +233,7 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 					this.log('warn', `Failed to confirm PoE state: ${(error as Error).message}`)
 				}
 				this.confirmationTimeouts.delete(timeoutKey)
-			}, 15000) // 15 second delay
+			}, 30000) // 30 second delay
 
 			this.confirmationTimeouts.set(timeoutKey, confirmTimeout)
 		} catch (error) {
