@@ -24,12 +24,13 @@ export function UpdateFeedbacks(instance: OmadaModuleInstance): void {
 			},
 			options: [
 				{
-					type: 'textinput',
-					label: 'Device MAC Address',
+					type: 'dropdown',
+					label: 'Device',
 					id: 'device_mac',
 					default: '',
-					tooltip: 'MAC address of the switch (e.g., 1C-61-B4-XX-XX-XX)',
-					useVariables: true,
+					tooltip: 'Select the switch to monitor',
+					choices: instance.getDeviceChoices(),
+					allowCustom: true,
 				},
 				{
 					type: 'number',
@@ -60,12 +61,13 @@ export function UpdateFeedbacks(instance: OmadaModuleInstance): void {
 			},
 			options: [
 				{
-					type: 'textinput',
-					label: 'Device MAC Address',
+					type: 'dropdown',
+					label: 'Device',
 					id: 'device_mac',
 					default: '',
-					tooltip: 'MAC address of the switch (e.g., 1C-61-B4-XX-XX-XX)',
-					useVariables: true,
+					tooltip: 'Select the switch to monitor',
+					choices: instance.getDeviceChoices(),
+					allowCustom: true,
 				},
 				{
 					type: 'number',

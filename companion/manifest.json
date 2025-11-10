@@ -3,7 +3,7 @@
 	"name": "tplink-omada",
 	"shortname": "omada",
 	"description": "TP-Link Omada Controller PoE Management",
-	"version": "1.0.7",
+	"version": "1.0.8",
 	"license": "MIT",
 	"repository": "git+https://github.com/bitfocus/companion-module-tplink-omada.git",
 	"bugs": "https://github.com/bitfocus/companion-module-tplink-omada/issues",

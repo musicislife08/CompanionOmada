@@ -14,12 +14,13 @@ export function UpdateActions(instance: OmadaModuleInstance): void {
 			description: 'Turn on PoE for a specific port',
 			options: [
 				{
-					type: 'textinput',
-					label: 'Device MAC Address',
+					type: 'dropdown',
+					label: 'Device',
 					id: 'device_mac',
 					default: '',
-					tooltip: 'MAC address of the switch (e.g., 1C-61-B4-XX-XX-XX)',
-					useVariables: true,
+					tooltip: 'Select the switch to control',
+					choices: instance.getDeviceChoices(),
+					allowCustom: true,
 				},
 				{
 					type: 'number',
@@ -44,12 +45,13 @@ export function UpdateActions(instance: OmadaModuleInstance): void {
 			description: 'Turn off PoE for a specific port',
 			options: [
 				{
-					type: 'textinput',
-					label: 'Device MAC Address',
+					type: 'dropdown',
+					label: 'Device',
 					id: 'device_mac',
 					default: '',
-					tooltip: 'MAC address of the switch (e.g., 1C-61-B4-XX-XX-XX)',
-					useVariables: true,
+					tooltip: 'Select the switch to control',
+					choices: instance.getDeviceChoices(),
+					allowCustom: true,
 				},
 				{
 					type: 'number',
@@ -74,12 +76,13 @@ export function UpdateActions(instance: OmadaModuleInstance): void {
 			description: 'Toggle PoE state for a specific port',
 			options: [
 				{
-					type: 'textinput',
-					label: 'Device MAC Address',
+					type: 'dropdown',
+					label: 'Device',
 					id: 'device_mac',
 					default: '',
-					tooltip: 'MAC address of the switch (e.g., 1C-61-B4-XX-XX-XX)',
-					useVariables: true,
+					tooltip: 'Select the switch to control',
+					choices: instance.getDeviceChoices(),
+					allowCustom: true,
 				},
 				{
 					type: 'number',

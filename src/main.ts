@@ -10,7 +10,8 @@ import { UpdateFeedbacks } from './feedbacks.js'
 export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	public config: ModuleConfig = {} as ModuleConfig
 	public client?: OmadaClient
-	private pollInterval?: NodeJS.Timeout
+	private deviceListPollInterval?: NodeJS.Timeout // Poll device list every 60s
+	private switchDetailsPollInterval?: NodeJS.Timeout // Poll switch details every 5s for PoE status
 	private deviceCache: Map<string, OmadaDevice> = new Map()
 	private switchDetailsCache: Map<string, any> = new Map() // Cache switch details for PoE status
 	private reconnectTimeout?: NodeJS.Timeout
@@ -83,21 +84,36 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	}
 
 	/**
-	 * Start polling for device updates (for feedbacks)
+	 * Start polling for device updates
+	 * - Device list: 10 minutes (switches rarely added/removed)
+	 * - Switch details: 5 seconds (for PoE status feedbacks)
 	 */
 	private startPolling(): void {
-		// Clear any existing interval
-		if (this.pollInterval) {
-			clearInterval(this.pollInterval)
+		// Clear any existing intervals
+		if (this.deviceListPollInterval) {
+			clearInterval(this.deviceListPollInterval)
+		}
+		if (this.switchDetailsPollInterval) {
+			clearInterval(this.switchDetailsPollInterval)
 		}
 
-		// Poll every 5 seconds
-		this.pollInterval = setInterval(async () => {
+		// Poll device list every 10 minutes
+		this.deviceListPollInterval = setInterval(async () => {
 			try {
-				await this.refreshDevices()
+				await this.refreshDeviceList()
 			} catch (error) {
 				const err = error as Error
-				this.log('warn', `Polling error: ${err.message}`)
+				this.log('warn', `Device list polling error: ${err.message}`)
+			}
+		}, 600000)
+
+		// Poll switch details every 5 seconds (for PoE status)
+		this.switchDetailsPollInterval = setInterval(async () => {
+			try {
+				await this.refreshSwitchDetails()
+			} catch (error) {
+				const err = error as Error
+				this.log('warn', `Switch details polling error: ${err.message}`)
 				// Don't change status here - let it fail multiple times before reconnecting
 			}
 		}, 5000)
@@ -107,16 +123,28 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	 * Stop polling for device updates
 	 */
 	private stopPolling(): void {
-		if (this.pollInterval) {
-			clearInterval(this.pollInterval)
-			this.pollInterval = undefined
+		if (this.deviceListPollInterval) {
+			clearInterval(this.deviceListPollInterval)
+			this.deviceListPollInterval = undefined
+		}
+		if (this.switchDetailsPollInterval) {
+			clearInterval(this.switchDetailsPollInterval)
+			this.switchDetailsPollInterval = undefined
 		}
 	}
 
 	/**
-	 * Refresh device list from controller
+	 * Refresh device list from controller (full refresh on startup)
 	 */
 	async refreshDevices(): Promise<void> {
+		await this.refreshDeviceList()
+		await this.refreshSwitchDetails()
+	}
+
+	/**
+	 * Refresh device list only (polled every 10 minutes)
+	 */
+	async refreshDeviceList(): Promise<void> {
 		if (!this.client) {
 			return
 		}
@@ -132,10 +160,29 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 
 			this.log('debug', `Refreshed ${devices.length} devices`)
 
-			// Also refresh switch details for switches (to get PoE port status)
-			this.switchDetailsCache.clear()
-			const switches = devices.filter((d) => d.type === 'switch')
+			// Update action and feedback definitions to refresh dropdown choices
+			this.updateActions()
+			this.updateFeedbacks()
+		} catch (error) {
+			const err = error as Error
+			this.log('error', `Failed to refresh device list: ${err.message}`)
+			throw error
+		}
+	}
 
+	/**
+	 * Refresh switch details for PoE status (polled every 5 seconds)
+	 */
+	async refreshSwitchDetails(): Promise<void> {
+		if (!this.client) {
+			return
+		}
+
+		try {
+			// Get all switches from device cache
+			const switches = this.getAllDevices().filter((d) => d.type === 'switch')
+
+			// Refresh switch details for all switches
 			for (const sw of switches) {
 				try {
 					const details = await this.client.getSwitchDetails(sw.mac)
@@ -145,12 +192,14 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 				}
 			}
 
+			this.log('debug', `Refreshed PoE status for ${switches.length} switches`)
+
 			// Update all feedbacks with new data
 			this.checkFeedbacks()
 		} catch (error) {
 			const err = error as Error
-			this.log('error', `Failed to refresh devices: ${err.message}`)
-			throw error
+			this.log('debug', `Failed to refresh switch details: ${err.message}`)
+			// Don't throw - this is called frequently in polling
 		}
 	}
 
@@ -166,6 +215,19 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	 */
 	getAllDevices(): OmadaDevice[] {
 		return Array.from(this.deviceCache.values())
+	}
+
+	/**
+	 * Get device choices for dropdowns (only switches with PoE capability)
+	 */
+	getDeviceChoices(): Array<{ id: string; label: string }> {
+		const devices = this.getAllDevices()
+		const switches = devices.filter((d) => d.type === 'switch')
+
+		return switches.map((device) => ({
+			id: device.mac,
+			label: `${device.name || 'Unnamed'} (${device.mac})`,
+		}))
 	}
 
 	/**
