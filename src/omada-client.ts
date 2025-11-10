@@ -142,13 +142,16 @@ export class OmadaClient {
 				`/${this.controllerId}/api/v2/sites/${this.siteId}/devices`
 			)
 
+			this.log('debug', `API Response status: ${response.status}`)
+			this.log('debug', `API Response keys: ${Object.keys(response.data || {}).join(', ')}`)
 			this.log('debug', `API Response errorCode: ${response.data?.errorCode}, msg: ${response.data?.msg}`)
 
-			if (response.data?.errorCode !== 0) {
+			// Check if response has errorCode field (some API versions may not)
+			if (response.data?.errorCode !== undefined && response.data?.errorCode !== 0) {
 				throw new Error(response.data?.msg || 'Failed to get devices')
 			}
 
-			const devices: OmadaDevice[] = response.data.result.data || []
+			const devices: OmadaDevice[] = response.data.result?.data || response.data.data || []
 			this.log('debug', `Retrieved ${devices.length} devices`)
 
 			return devices
@@ -160,6 +163,7 @@ export class OmadaClient {
 				return this.getDevices() // Retry after re-login
 			}
 			this.log('error', `getDevices error: ${err.message}, status: ${err.response?.status}`)
+			this.log('error', `Response data: ${JSON.stringify(err.response?.data)}`)
 			throw error
 		}
 	}
