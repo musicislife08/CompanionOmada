@@ -183,8 +183,347 @@ async function testConnection() {
 			console.log(JSON.stringify(devicesResponse.data, null, 2).substring(0, 2000))
 		}
 
+		// Step 5: Find specific device
+		console.log('\n5. Looking for specific device...')
+		const targetMac = '5C-62-8B-AE-F1-F7'
+		const targetMacNoDashes = targetMac.replace(/-/g, '')
+		const targetMacColons = targetMac.replace(/-/g, ':')
+		const targetPort = 16
+
+		let devices = []
+		if (Array.isArray(devicesResponse.data)) {
+			devices = devicesResponse.data
+		} else if (Array.isArray(devicesResponse.data?.result)) {
+			devices = devicesResponse.data.result
+		} else if (devicesResponse.data?.result?.data) {
+			devices = devicesResponse.data.result.data
+		} else if (devicesResponse.data?.data) {
+			devices = devicesResponse.data.data
+		}
+
+		console.log(`   Searching ${devices.length} devices for MAC: ${targetMac}`)
+
+		const targetDevice = devices.find(d => d.mac === targetMac)
+		if (targetDevice) {
+			console.log(`   ✓ Found device: ${targetDevice.name}`)
+			console.log(`     Type: ${targetDevice.type}`)
+			console.log(`     Model: ${targetDevice.model || 'unknown'}`)
+			console.log(`     MAC: ${targetDevice.mac}`)
+
+			// Check if device has port info
+			if (targetDevice.ports) {
+				console.log(`     Ports: ${targetDevice.ports.length}`)
+				const port = targetDevice.ports.find(p => p.port === targetPort)
+				if (port) {
+					console.log(`     Port ${targetPort} PoE: ${port.poe || port.poe_mode || 'unknown'}`)
+				}
+			} else {
+				console.log(`     ⚠️  No port information in device object`)
+			}
+
+			// Step 6: Get switch details with ports
+			console.log(`\n6. Getting switch details with port information...`)
+
+			try {
+				const switchUrl = `/${controllerId}/api/v2/sites/${site}/switches/${targetMac}`
+				console.log(`   URL: ${switchUrl}`)
+
+				const switchResponse = await http.get(switchUrl)
+
+				if (switchResponse.data?.errorCode === 0) {
+					console.log(`   ✓ Got switch details`)
+					const switchData = switchResponse.data.result
+
+					if (switchData.ports) {
+						console.log(`   Found ${switchData.ports.length} ports`)
+						const port = switchData.ports.find(p => p.port === targetPort)
+						if (port) {
+							console.log(`   Port ${targetPort} details:`)
+							console.log(`     Full port object:`)
+							console.log(JSON.stringify(port, null, 2))
+
+							// Step 7: Try to toggle PoE on port 16
+							console.log(`\n7. Trying PoE toggle with different payload formats...`)
+
+							const poeUrl = `/${controllerId}/api/v2/sites/${site}/switches/${targetMac}/ports/${targetPort}`
+							const poeUrlById = `/${controllerId}/api/v2/sites/${site}/switches/${targetMac}/ports/${port.id}`
+							console.log(`   URL (by port number): ${poeUrl}`)
+							console.log(`   URL (by port ID): ${poeUrlById}`)
+
+							// Try format 1: wrapped in overrides
+							try {
+								console.log(`\n   Attempt 1: { overrides: { enable_poe: true } }`)
+								const poeResponse = await http.patch(poeUrl, {
+									overrides: {
+										enable_poe: true
+									}
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with overrides format!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 2: direct enable_poe
+							try {
+								console.log(`\n   Attempt 2: { enable_poe: true }`)
+								const poeResponse = await http.patch(poeUrl, {
+									enable_poe: true
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with direct format!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 3: poe object
+							try {
+								console.log(`\n   Attempt 3: { poe: { enable: true } }`)
+								const poeResponse = await http.patch(poeUrl, {
+									poe: {
+										enable: true
+									}
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with poe object format!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 4: PUT with full port config
+							try {
+								console.log(`\n   Attempt 4: PUT with full port config + overrides`)
+								const poeResponse = await http.put(poeUrl, {
+									...port,
+									overrides: {
+										enable_poe: false  // Turn OFF to test
+									}
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with PUT + full config!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 5: Just the profile ID
+							try {
+								console.log(`\n   Attempt 5: PATCH with profileId + disable false`)
+								const poeResponse = await http.patch(poeUrl, {
+									profileId: port.profileId,
+									disable: false,
+									overrides: {
+										enable_poe: false
+									}
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with profileId format!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 6: Use port ID instead of port number in URL
+							try {
+								console.log(`\n   Attempt 6: Use port ID in URL with overrides`)
+								const poeResponse = await http.patch(poeUrlById, {
+									overrides: {
+										enable_poe: false
+									}
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with port ID in URL!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 7: POST to /poe endpoint
+							try {
+								console.log(`\n   Attempt 7: POST to separate /poe endpoint`)
+								const poeResponse = await http.post(`/${controllerId}/api/v2/sites/${site}/switches/${targetMac}/ports/${targetPort}/poe`, {
+									enable: false
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with /poe POST endpoint!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 8: PATCH with just port number and overrides at root
+							try {
+								console.log(`\n   Attempt 8: PATCH with port + overrides at root`)
+								const poeResponse = await http.patch(poeUrl, {
+									port: targetPort,
+									overrides: {
+										enable_poe: false
+									}
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 9: PATCH with profileId set to empty
+							try {
+								console.log(`\n   Attempt 9: PATCH with profileId="" + overrides`)
+								const poeResponse = await http.patch(poeUrl, {
+									profileId: "",
+									overrides: {
+										enable_poe: false
+									}
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with empty profileId!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 10: Just send the whole port object with enable_poe added
+							try {
+								console.log(`\n   Attempt 10: PUT with full port + enable_poe in overrides`)
+								const modifiedPort = {
+									...port,
+									overrides: {
+										...port.overrides,
+										enable_poe: false
+									}
+								}
+								delete modifiedPort.id
+								delete modifiedPort.portStatus
+								delete modifiedPort.portCap
+
+								const poeResponse = await http.patch(poeUrl, modifiedPort)
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with full port object!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 11: Use MAC without dashes
+							try {
+								console.log(`\n   Attempt 11: Try MAC without dashes in URL`)
+								const poeUrlNoDashes = `/${controllerId}/api/v2/sites/${site}/switches/${targetMacNoDashes}/ports/${targetPort}`
+								const poeResponse = await http.patch(poeUrlNoDashes, {
+									overrides: {
+										enable_poe: false
+									}
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ SUCCESS with MAC no dashes!`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Try format 12: THE CORRECT FORMAT FROM WEB UI!
+							console.log(`\n   Attempt 12: Web UI format - Turn PoE OFF`)
+							try {
+								const poeResponse = await http.patch(poeUrl, {
+									name: port.name,
+									profileId: port.profileId,
+									profileOverrideEnable: true,
+									dhcpL2RelaySettings: { enable: false },
+									operation: "switching",
+									linkSpeed: 0,
+									duplex: 0,
+									topoNotifyEnable: false,
+									poe: 0,  // 0 = OFF
+									dot1x: 2,
+									bandWidthCtrlType: 0,
+									loopbackDetectEnable: false,
+									spanningTreeEnable: false,
+									loopbackDetectVlanBasedEnable: false,
+									portIsolationEnable: false,
+									flowControlEnable: false,
+									eeeEnable: false,
+									lldpMedEnable: true
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ PoE turned OFF on port ${targetPort}`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+
+							// Now turn it back ON
+							console.log(`\n   Attempt 13: Turn PoE back ON (poe: 1)`)
+							try {
+								const poeResponse = await http.patch(poeUrl, {
+									name: port.name,
+									profileId: port.profileId,
+									profileOverrideEnable: true,
+									dhcpL2RelaySettings: { enable: false },
+									operation: "switching",
+									linkSpeed: 0,
+									duplex: 0,
+									topoNotifyEnable: false,
+									poe: 1,  // 1 = ON
+									dot1x: 2,
+									bandWidthCtrlType: 0,
+									loopbackDetectEnable: false,
+									spanningTreeEnable: false,
+									loopbackDetectVlanBasedEnable: false,
+									portIsolationEnable: false,
+									flowControlEnable: false,
+									eeeEnable: false,
+									lldpMedEnable: true
+								})
+								console.log(`   Result: errorCode=${poeResponse.data?.errorCode}, msg="${poeResponse.data?.msg}"`)
+								if (poeResponse.data?.errorCode === 0) {
+									console.log(`   ✓ PoE turned ON on port ${targetPort}`)
+								}
+							} catch (e) {
+								console.log(`   Failed: ${e.response?.data?.msg || e.message}`)
+							}
+						} else {
+							console.log(`   ⚠️  Port ${targetPort} not found in ports array`)
+						}
+					} else {
+						console.log(`   ⚠️  No ports in switch details`)
+						console.log(`   Switch data keys: ${Object.keys(switchData).join(', ')}`)
+					}
+				} else {
+					console.log(`   ⚠️  API returned error code: ${switchResponse.data?.errorCode}`)
+					console.log(`   Message: ${switchResponse.data?.msg}`)
+				}
+			} catch (switchError) {
+				console.log(`   ❌ Failed to get switch details: ${switchError.message}`)
+				if (switchError.response) {
+					console.log(`   Response status: ${switchError.response.status}`)
+					console.log(`   Response data: ${JSON.stringify(switchError.response.data, null, 2).substring(0, 500)}`)
+				}
+			}
+		} else {
+			console.log(`   ❌ Device ${targetMac} not found`)
+			console.log(`   Available devices:`)
+			devices.forEach(d => {
+				console.log(`     - ${d.mac} (${d.name || 'unnamed'}) - ${d.type}`)
+			})
+		}
+
 		// Logout
-		console.log('\n5. Logging out...')
+		console.log('\n8. Logging out...')
 		await http.post(`/${controllerId}/api/v2/logout`)
 		console.log('   ✓ Logged out')
 

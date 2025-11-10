@@ -12,6 +12,7 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	public client?: OmadaClient
 	private pollInterval?: NodeJS.Timeout
 	private deviceCache: Map<string, OmadaDevice> = new Map()
+	private switchDetailsCache: Map<string, any> = new Map() // Cache switch details for PoE status
 	private reconnectTimeout?: NodeJS.Timeout
 
 	/**
@@ -130,6 +131,19 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 
 			this.log('debug', `Refreshed ${devices.length} devices`)
 
+			// Also refresh switch details for switches (to get PoE port status)
+			this.switchDetailsCache.clear()
+			const switches = devices.filter((d) => d.type === 'switch')
+
+			for (const sw of switches) {
+				try {
+					const details = await this.client.getSwitchDetails(sw.mac)
+					this.switchDetailsCache.set(sw.mac, details)
+				} catch (error) {
+					this.log('warn', `Failed to get details for switch ${sw.mac}: ${(error as Error).message}`)
+				}
+			}
+
 			// Update all feedbacks with new data
 			this.checkFeedbacks()
 		} catch (error) {
@@ -155,19 +169,21 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 
 	/**
 	 * Check if PoE is enabled on a specific port
+	 * Uses switch details cache which includes portStatus.poe
 	 */
 	isPoeEnabled(deviceMac: string, portNumber: number): boolean {
-		const device = this.getDevice(deviceMac)
-		if (!device) {
+		const switchDetails = this.switchDetailsCache.get(deviceMac)
+		if (!switchDetails) {
 			return false
 		}
 
-		const port = device.ports.find((p) => p.port === portNumber)
+		const port = switchDetails.ports?.find((p: any) => p.port === portNumber)
 		if (!port) {
 			return false
 		}
 
-		return port.poe === true || port.poe_mode === 'enabled'
+		// PoE status is in portStatus.poe (boolean) for OC200
+		return port.portStatus?.poe === true
 	}
 
 	/**

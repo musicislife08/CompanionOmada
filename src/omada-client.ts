@@ -275,35 +275,85 @@ export class OmadaClient {
 
 	/**
 	 * Get the PoE status of a specific port
+	 * OC200 stores PoE status in portStatus.poe (boolean)
 	 */
 	async getPortPoeStatus(deviceMac: string, portNumber: number): Promise<boolean> {
-		const device = await this.getDevice(deviceMac)
-		if (!device) {
-			throw new Error(`Device ${deviceMac} not found`)
-		}
+		try {
+			// Get switch details which includes port status
+			const switchData = await this.getSwitchDetails(deviceMac)
+			const port = switchData.ports?.find((p: any) => p.port === portNumber)
 
-		const port = device.ports.find((p) => p.port === portNumber)
-		if (!port) {
-			throw new Error(`Port ${portNumber} not found on device ${deviceMac}`)
-		}
+			if (!port) {
+				throw new Error(`Port ${portNumber} not found on device ${deviceMac}`)
+			}
 
-		// Check if PoE is enabled - can be indicated by poe field or poe_mode
-		return port.poe === true || port.poe_mode === 'enabled'
+			// PoE status is in portStatus.poe (boolean) for OC200
+			return port.portStatus?.poe === true
+		} catch (error) {
+			this.log('error', `Failed to get PoE status for port ${portNumber}: ${(error as Error).message}`)
+			throw error
+		}
+	}
+
+	/**
+	 * Get switch details including port configuration
+	 */
+	async getSwitchDetails(deviceMac: string): Promise<any> {
+		try {
+			const response = await this.http.get(
+				`/${this.controllerId}/api/v2/sites/${this.siteId}/switches/${deviceMac}`
+			)
+
+			if (response.data?.errorCode !== 0) {
+				throw new Error(response.data?.msg || 'Failed to get switch details')
+			}
+
+			return response.data.result
+		} catch (error) {
+			const err = error as AxiosError
+			this.log('error', `getSwitchDetails error: ${err.message}`)
+			throw error
+		}
 	}
 
 	/**
 	 * Enable or disable PoE on a switch port
+	 * OC200 requires profileOverrideEnable and full port config
 	 */
 	async updateSwitchPortPoe(deviceMac: string, portNumber: number, enablePoe: boolean): Promise<void> {
 		try {
 			this.log('debug', `Setting PoE ${enablePoe ? 'ON' : 'OFF'} for port ${portNumber} on ${deviceMac}`)
 
+			// Get current port configuration
+			const switchData = await this.getSwitchDetails(deviceMac)
+			const port = switchData.ports?.find((p: any) => p.port === portNumber)
+
+			if (!port) {
+				throw new Error(`Port ${portNumber} not found on switch ${deviceMac}`)
+			}
+
+			// OC200 requires full port config with profileOverrideEnable
 			const response = await this.http.patch(
 				`/${this.controllerId}/api/v2/sites/${this.siteId}/switches/${deviceMac}/ports/${portNumber}`,
 				{
-					overrides: {
-						enable_poe: enablePoe,
-					},
+					name: port.name,
+					profileId: port.profileId,
+					profileOverrideEnable: true,
+					dhcpL2RelaySettings: { enable: false },
+					operation: 'switching',
+					linkSpeed: 0,
+					duplex: 0,
+					topoNotifyEnable: false,
+					poe: enablePoe ? 1 : 0, // 0 = OFF, 1 = ON
+					dot1x: 2,
+					bandWidthCtrlType: 0,
+					loopbackDetectEnable: false,
+					spanningTreeEnable: false,
+					loopbackDetectVlanBasedEnable: false,
+					portIsolationEnable: false,
+					flowControlEnable: false,
+					eeeEnable: false,
+					lldpMedEnable: true,
 				}
 			)
 
