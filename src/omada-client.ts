@@ -134,8 +134,9 @@ export class OmadaClient {
 	 * This method updates this.siteId with the resolved site key
 	 */
 	async resolveSiteKey(): Promise<void> {
+		const originalSiteId = this.siteId
 		try {
-			this.log('debug', `Resolving site key for: "${this.siteId}"`)
+			this.log('info', `=== Resolving site key for: "${this.siteId}" ===`)
 			const response = await this.http.get(`/${this.controllerId}/api/v2/users/current`)
 
 			this.log('debug', `User info response status: ${response.status}`)
@@ -146,32 +147,33 @@ export class OmadaClient {
 			}
 
 			const userSites = response.data.result.privilege.sites || []
-			this.log('debug', `Found ${userSites.length} sites in user privileges`)
+			this.log('info', `Found ${userSites.length} sites in user privileges:`)
 			userSites.forEach((s: any) => {
-				this.log('debug', `  Site: "${s.name}" -> Key: "${s.key}"`)
+				this.log('info', `  - Site: "${s.name}" -> Key: "${s.key}"`)
 			})
 
 			// Find the matching site by name
 			const matchingSite = userSites.find((s: any) => s.name === this.siteId)
 			if (matchingSite) {
 				const siteKey = matchingSite.key
-				this.log('info', `Resolved site "${this.siteId}" to key: ${siteKey}`)
+				this.log('info', `✓ Resolved site "${this.siteId}" to key: ${siteKey}`)
 				this.siteId = siteKey
-				this.log('debug', `this.siteId is now: ${this.siteId}`)
+				this.log('info', `✓ this.siteId updated from "${originalSiteId}" to "${this.siteId}"`)
 			} else {
 				// If no match found, log available sites and keep siteId as-is
 				// (might already be a site key, or using software controller)
 				const availableSites = userSites.map((s: any) => s.name).join(', ')
-				this.log('warn', `Site "${this.siteId}" not found in user privileges. Available: ${availableSites}`)
-				this.log('warn', `Using "${this.siteId}" as-is (may already be a site key)`)
+				this.log('warn', `⚠️  Site "${this.siteId}" not found in user privileges. Available: ${availableSites}`)
+				this.log('warn', `⚠️  Using "${this.siteId}" as-is (may already be a site key)`)
 			}
 		} catch (error) {
 			const err = error as AxiosError
-			this.log('error', `resolveSiteKey error: ${err.message}`)
+			this.log('error', `❌ resolveSiteKey error: ${err.message}`)
 			if (err.response) {
 				this.log('error', `Response status: ${err.response.status}`)
 				this.log('error', `Response data type: ${typeof err.response.data}`)
 			}
+			this.log('error', `Site ID remains: "${this.siteId}"`)
 			// Keep siteId as-is if we can't get user info
 		}
 	}
@@ -201,7 +203,7 @@ export class OmadaClient {
 	 */
 	async getDevices(): Promise<OmadaDevice[]> {
 		try {
-			this.log('debug', `Getting devices from site: ${this.siteId}`)
+			this.log('info', `Getting devices from site: "${this.siteId}"`)
 			this.log('debug', `Devices URL: /${this.controllerId}/api/v2/sites/${this.siteId}/devices`)
 
 			const response = await this.http.get(
