@@ -5,7 +5,8 @@
 	"main": "dist/main.js",
 	"scripts": {
 		"build": "companion-module-build",
-		"dev": "companion-module-build --dev"
+		"dev": "companion-module-build --dev",
+		"test": "node test-connection.mjs"
 	},
 	"author": "",
 	"license": "MIT",
@@ -23,7 +24,10 @@
 	],
 	"dependencies": {
 		"@companion-module/base": "^1.10.0",
-		"axios": "^1.7.0"
+		"axios": "^1.7.0",
+		"axios-cookiejar-support": "^6.0.4",
+		"dotenv": "^17.2.3",
+		"tough-cookie": "^6.0.0"
 	},
 	"devDependencies": {
 		"@companion-module/tools": "^2.1.0",

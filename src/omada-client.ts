@@ -38,6 +38,7 @@ export class OmadaClient {
 	private username: string
 	private password: string
 	private logCallback?: (level: LogLevel, message: string) => void
+	private cookies: string[] = []
 
 	constructor(config: ModuleConfig, logCallback?: (level: LogLevel, message: string) => void) {
 		this.baseUrl = `https://${config.host}:${config.port}`
@@ -98,8 +99,21 @@ export class OmadaClient {
 			this.token = loginResponse.data.result.token
 			this.log('info', 'Successfully logged in to Omada controller')
 
-			// Set token for all future requests
+			// Extract cookies from login response
+			const setCookieHeader = loginResponse.headers['set-cookie']
+			if (setCookieHeader) {
+				this.cookies = setCookieHeader
+				this.log('debug', `Received ${this.cookies.length} cookies from login`)
+			}
+
+			// Set token and cookies for all future requests
 			this.http.defaults.headers.common['Csrf-Token'] = this.token
+			if (this.cookies.length > 0) {
+				this.http.defaults.headers.common['Cookie'] = this.cookies.map(c => c.split(';')[0]).join('; ')
+			}
+
+			// Resolve site name to site key (required for OC200 hardware controllers)
+			await this.resolveSiteKey()
 		} catch (error) {
 			const err = error as AxiosError
 			this.log('error', `Login failed: ${err.message}`)
@@ -111,6 +125,43 @@ export class OmadaClient {
 				throw new Error('SSL certificate error - try disabling SSL verification')
 			}
 			throw error
+		}
+	}
+
+	/**
+	 * Get user info and resolve site name to site key
+	 * OC200 controllers require using the site KEY (hex ID) instead of the site name
+	 * This method updates this.siteId with the resolved site key
+	 */
+	async resolveSiteKey(): Promise<void> {
+		try {
+			this.log('debug', 'Getting user info to resolve site key...')
+			const response = await this.http.get(`/${this.controllerId}/api/v2/users/current`)
+
+			if (response.data?.errorCode !== 0) {
+				throw new Error(response.data?.msg || 'Failed to get user info')
+			}
+
+			const userSites = response.data.result.privilege.sites || []
+			this.log('debug', `Found ${userSites.length} sites in user privileges`)
+
+			// Find the matching site by name
+			const matchingSite = userSites.find((s: any) => s.name === this.siteId)
+			if (matchingSite) {
+				const siteKey = matchingSite.key
+				this.log('debug', `Resolved site "${this.siteId}" to key: ${siteKey}`)
+				this.siteId = siteKey
+			} else {
+				// If no match found, log available sites and keep siteId as-is
+				// (might already be a site key, or using software controller)
+				const availableSites = userSites.map((s: any) => s.name).join(', ')
+				this.log('warn', `Site "${this.siteId}" not found in user privileges. Available: ${availableSites}`)
+				this.log('warn', `Using "${this.siteId}" as-is (may already be a site key)`)
+			}
+		} catch (error) {
+			const err = error as AxiosError
+			this.log('error', `resolveSiteKey error: ${err.message}`)
+			// Keep siteId as-is if we can't get user info
 		}
 	}
 
@@ -128,7 +179,9 @@ export class OmadaClient {
 			this.log('debug', 'Logout error (ignored)')
 		} finally {
 			this.token = ''
+			this.cookies = []
 			delete this.http.defaults.headers.common['Csrf-Token']
+			delete this.http.defaults.headers.common['Cookie']
 		}
 	}
 
@@ -151,19 +204,33 @@ export class OmadaClient {
 
 			// Handle different API response formats:
 			// 1. Direct array: response.data = [...]
-			// 2. Wrapped in result: response.data = { result: { data: [...] } }
-			// 3. Wrapped in data: response.data = { data: [...] }
+			// 2. Result as array: response.data = { errorCode: 0, msg: "Success.", result: [...] } (OC200)
+			// 3. Wrapped in result.data: response.data = { result: { data: [...] } }
+			// 4. Wrapped in data: response.data = { data: [...] }
 			let devices: OmadaDevice[] = []
 
 			if (Array.isArray(response.data)) {
 				// Format 1: Direct array
 				devices = response.data
+				this.log('debug', `Response is direct array with ${devices.length} items`)
+				if (devices.length > 0) {
+					this.log('debug', `First device keys: ${Object.keys(devices[0] || {}).slice(0, 10).join(', ')}`)
+				}
+			} else if (Array.isArray(response.data?.result)) {
+				// Format 2: Result is directly an array (OC200 hardware controllers)
+				devices = response.data.result
+				this.log('debug', `Response has result as array with ${devices.length} items`)
 			} else if (response.data?.result?.data) {
-				// Format 2: Wrapped in result
+				// Format 3: Wrapped in result.data
 				devices = response.data.result.data
+				this.log('debug', `Response is wrapped in result.data with ${devices.length} items`)
 			} else if (response.data?.data) {
-				// Format 3: Wrapped in data
+				// Format 4: Wrapped in data
 				devices = response.data.data
+				this.log('debug', `Response is wrapped in data with ${devices.length} items`)
+			} else {
+				this.log('debug', `Response type: ${typeof response.data}, isArray: ${Array.isArray(response.data)}`)
+				this.log('debug', `Response data type: ${response.data?.constructor?.name}`)
 			}
 
 			this.log('debug', `Retrieved ${devices.length} devices`)
