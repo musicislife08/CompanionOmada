@@ -1,0 +1,9 @@
+node_modules/
+dist/
+pkg/
+*.log
+.DS_Store
+*.tgz
+.vscode/
+.idea/
+.claude/

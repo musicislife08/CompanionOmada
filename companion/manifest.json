@@ -1,0 +1,21 @@
+{
+	"id": "tplink-omada",
+	"name": "tplink-omada",
+	"shortname": "omada",
+	"description": "TP-Link Omada Controller PoE Management",
+	"version": "1.0.0",
+	"license": "MIT",
+	"repository": "git+https://github.com/bitfocus/companion-module-tplink-omada.git",
+	"bugs": "https://github.com/bitfocus/companion-module-tplink-omada/issues",
+	"maintainers": [],
+	"runtime": {
+		"type": "node22",
+		"api": "nodejs-ipc",
+		"apiVersion": "1.0.0",
+		"entrypoint": "../dist/main.js"
+	},
+	"legacyIds": [],
+	"manufacturer": "TP-Link",
+	"products": ["Omada Controller"],
+	"keywords": ["omada", "tplink", "poe", "networking", "switch"]
+}
