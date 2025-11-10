@@ -137,9 +137,12 @@ export class OmadaClient {
 	 */
 	async getDevices(): Promise<OmadaDevice[]> {
 		try {
+			this.log('debug', `Getting devices from site: ${this.siteId}`)
 			const response = await this.http.get(
 				`/${this.controllerId}/api/v2/sites/${this.siteId}/devices`
 			)
+
+			this.log('debug', `API Response errorCode: ${response.data?.errorCode}, msg: ${response.data?.msg}`)
 
 			if (response.data?.errorCode !== 0) {
 				throw new Error(response.data?.msg || 'Failed to get devices')
@@ -156,6 +159,7 @@ export class OmadaClient {
 				await this.login()
 				return this.getDevices() // Retry after re-login
 			}
+			this.log('error', `getDevices error: ${err.message}, status: ${err.response?.status}`)
 			throw error
 		}
 	}
