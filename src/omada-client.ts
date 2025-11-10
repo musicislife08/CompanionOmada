@@ -143,15 +143,29 @@ export class OmadaClient {
 			)
 
 			this.log('debug', `API Response status: ${response.status}`)
-			this.log('debug', `API Response keys: ${Object.keys(response.data || {}).join(', ')}`)
-			this.log('debug', `API Response errorCode: ${response.data?.errorCode}, msg: ${response.data?.msg}`)
 
 			// Check if response has errorCode field (some API versions may not)
 			if (response.data?.errorCode !== undefined && response.data?.errorCode !== 0) {
 				throw new Error(response.data?.msg || 'Failed to get devices')
 			}
 
-			const devices: OmadaDevice[] = response.data.result?.data || response.data.data || []
+			// Handle different API response formats:
+			// 1. Direct array: response.data = [...]
+			// 2. Wrapped in result: response.data = { result: { data: [...] } }
+			// 3. Wrapped in data: response.data = { data: [...] }
+			let devices: OmadaDevice[] = []
+
+			if (Array.isArray(response.data)) {
+				// Format 1: Direct array
+				devices = response.data
+			} else if (response.data?.result?.data) {
+				// Format 2: Wrapped in result
+				devices = response.data.result.data
+			} else if (response.data?.data) {
+				// Format 3: Wrapped in data
+				devices = response.data.data
+			}
+
 			this.log('debug', `Retrieved ${devices.length} devices`)
 
 			return devices
@@ -163,7 +177,6 @@ export class OmadaClient {
 				return this.getDevices() // Retry after re-login
 			}
 			this.log('error', `getDevices error: ${err.message}, status: ${err.response?.status}`)
-			this.log('error', `Response data: ${JSON.stringify(err.response?.data)}`)
 			throw error
 		}
 	}
