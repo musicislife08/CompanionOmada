@@ -215,6 +215,16 @@ This is a Bitfocus Companion v3 module following the `@companion-module/base` fr
 
 ## Known Issues & Quirks
 
+**Companion's 10-second init deadline (do not regress this):**
+- Companion aborts `init()` after 10s (`IpcWrapper.sendWithCb`) and **kills the module process**
+- A dead process also means the connection config becomes un-editable in Companion's UI,
+  so a bad/slow controller locks the user out of the very settings needed to fix it
+- Measured against a real OC200 (v5.13.24): `/api/info` 0.3s, **`/login` 8.1s**,
+  `/users/current` 1.6s, `/devices` 2.8s, plus ~1-3s per switch = **17s total**
+- Therefore `init()` and `configUpdated()` must start `initConnection()` with `void`,
+  never `await` it, and report progress through `updateStatus()` instead
+- `test-init-nonblocking.mjs` asserts this; run it after touching the lifecycle
+
 **Hardware Response Times:**
 - PoE changes can take 8-12+ seconds to apply on actual hardware
 - Optimistic updates provide instant feedback while hardware catches up
@@ -238,6 +248,12 @@ This is a Bitfocus Companion v3 module following the `@companion-module/base` fr
 - Code handles both formats in `getDevices()`
 
 ## Version History
+
+**v1.0.9** - Non-blocking init (module no longer dies on slow/failed connect)
+- `init()` and `configUpdated()` no longer await the connection; it runs in the background
+- Request timeout now configurable (default 30s, was hardcoded 10s)
+- Connection errors now log the full URL, error code and elapsed time
+- Poll ticks skip instead of stacking when a sweep overruns its interval
 
 **v1.0.7** - Password field security
 - Changed password config field to `secret-text` type for masked input

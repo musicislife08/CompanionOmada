@@ -39,13 +39,21 @@ export class OmadaClient {
 	private password: string
 	private logCallback?: (level: LogLevel, message: string) => void
 	private cookies: string[] = []
+	private timeoutSeconds: number
+	private host: string
 
 	constructor(config: ModuleConfig, logCallback?: (level: LogLevel, message: string) => void) {
-		this.baseUrl = `https://${config.host}:${config.port}`
+		// Trim so a stray space pasted into the config field doesn't produce an
+		// unresolvable host that fails in a confusing way
+		this.host = String(config.host ?? '').trim()
+		this.baseUrl = `https://${this.host}:${config.port}`
 		this.siteId = config.site
 		this.username = config.username
 		this.password = config.password
 		this.logCallback = logCallback
+
+		// Falls back for configs saved before the timeout field existed
+		this.timeoutSeconds = config.timeout && config.timeout > 0 ? config.timeout : 30
 
 		// Create HTTP client with optional SSL verification
 		this.http = axios.create({
@@ -53,11 +61,34 @@ export class OmadaClient {
 			httpsAgent: new https.Agent({
 				rejectUnauthorized: config.verifySsl,
 			}),
-			timeout: 10000,
+			timeout: this.timeoutSeconds * 1000,
 			headers: {
 				'Content-Type': 'application/json',
 			},
 		})
+	}
+
+	/**
+	 * Build a diagnostic description of a failed request.
+	 * The bare axios message ("timeout of 30000ms exceeded") omits which call failed,
+	 * which makes connection problems very hard to read in Companion's log.
+	 */
+	private describeError(error: unknown): string {
+		const err = error as AxiosError
+		const method = err.config?.method?.toUpperCase()
+		const url = err.config?.url
+		const parts: string[] = []
+		if (method && url) {
+			parts.push(`${method} ${this.baseUrl}${url}`)
+		}
+		parts.push(err.message || String(error))
+		if (err.code) {
+			parts.push(`code=${err.code}`)
+		}
+		if (err.response?.status) {
+			parts.push(`status=${err.response.status}`)
+		}
+		return parts.join(' | ')
 	}
 
 	/**
@@ -73,17 +104,27 @@ export class OmadaClient {
 	 * Login to the Omada controller and obtain authentication token
 	 */
 	async login(): Promise<void> {
+		// Logged at info so a failing connection shows what it actually tried to reach.
+		// Without this, a bad host/port is indistinguishable from an unreachable network.
+		this.log('info', `Connecting to ${this.baseUrl} as "${this.username}" (site "${this.siteId}", timeout ${this.timeoutSeconds}s)`)
+
+		const startedAt = Date.now()
+		const elapsed = () => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+
 		try {
 			// Step 1: Get controller ID
-			this.log('debug', 'Fetching controller info...')
+			this.log('debug', `Fetching controller info from ${this.baseUrl}/api/info ...`)
 			const infoResponse = await this.http.get('/api/info')
 
 			if (!infoResponse.data?.result?.omadacId) {
-				throw new Error('Failed to get controller ID from response')
+				throw new Error(`Failed to get controller ID from ${this.baseUrl}/api/info response`)
 			}
 
 			this.controllerId = infoResponse.data.result.omadacId
-			this.log('debug', `Controller ID: ${this.controllerId}`)
+			this.log(
+				'debug',
+				`Controller ID: ${this.controllerId} (version ${infoResponse.data.result.controllerVer ?? 'unknown'}) [${elapsed()}]`
+			)
 
 			// Step 2: Login with credentials
 			this.log('debug', 'Attempting login...')
@@ -91,6 +132,7 @@ export class OmadaClient {
 				username: this.username,
 				password: this.password,
 			})
+			this.log('debug', `Login request completed [${elapsed()}]`)
 
 			if (loginResponse.data?.errorCode !== 0) {
 				throw new Error(loginResponse.data?.msg || 'Login failed')
@@ -114,13 +156,23 @@ export class OmadaClient {
 
 			// Resolve site name to site key (required for OC200 hardware controllers)
 			await this.resolveSiteKey()
+			this.log('debug', `Login sequence complete [${elapsed()}]`)
 		} catch (error) {
 			const err = error as AxiosError
-			this.log('error', `Login failed: ${err.message}`)
+			this.log('error', `Login failed after ${elapsed()}: ${this.describeError(error)}`)
+
 			if (err.response?.status === 401) {
 				throw new Error('Invalid username or password')
 			} else if (err.code === 'ECONNREFUSED') {
-				throw new Error('Cannot connect to controller - check IP and port')
+				throw new Error(`Connection refused by ${this.baseUrl} - check the port`)
+			} else if (err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN') {
+				throw new Error(`Cannot resolve host "${this.host}" - check the controller address`)
+			} else if (err.code === 'EHOSTUNREACH' || err.code === 'ENETUNREACH') {
+				throw new Error(`No network route to ${this.baseUrl} - check the controller address`)
+			} else if (err.code === 'ETIMEDOUT' || err.code === 'ECONNABORTED') {
+				throw new Error(
+					`No response from ${this.baseUrl} within ${this.timeoutSeconds}s - the controller may be slow, or unreachable from this machine`
+				)
 			} else if (err.code === 'CERT_HAS_EXPIRED' || err.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
 				throw new Error('SSL certificate error - try disabling SSL verification')
 			}
@@ -168,7 +220,7 @@ export class OmadaClient {
 			}
 		} catch (error) {
 			const err = error as AxiosError
-			this.log('error', `❌ resolveSiteKey error: ${err.message}`)
+			this.log('error', `❌ resolveSiteKey error: ${this.describeError(error)}`)
 			if (err.response) {
 				this.log('error', `Response status: ${err.response.status}`)
 				this.log('error', `Response data type: ${typeof err.response.data}`)
@@ -262,7 +314,7 @@ export class OmadaClient {
 				await this.login()
 				return this.getDevices() // Retry after re-login
 			}
-			this.log('error', `getDevices error: ${err.message}, status: ${err.response?.status}`)
+			this.log('error', `getDevices error: ${this.describeError(error)}`)
 			throw error
 		}
 	}
@@ -312,8 +364,7 @@ export class OmadaClient {
 
 			return response.data.result
 		} catch (error) {
-			const err = error as AxiosError
-			this.log('error', `getSwitchDetails error: ${err.message}`)
+			this.log('error', `getSwitchDetails error: ${this.describeError(error)}`)
 			throw error
 		}
 	}
@@ -333,8 +384,7 @@ export class OmadaClient {
 
 			return response.data.result
 		} catch (error) {
-			const err = error as AxiosError
-			this.log('error', `getPortProfile error: ${err.message}`)
+			this.log('error', `getPortProfile error: ${this.describeError(error)}`)
 			throw error
 		}
 	}

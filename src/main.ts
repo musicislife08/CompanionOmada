@@ -16,13 +16,21 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	private switchDetailsCache: Map<string, any> = new Map() // Cache switch details for PoE status
 	private reconnectTimeout?: NodeJS.Timeout
 	private confirmationTimeouts: Map<string, NodeJS.Timeout> = new Map() // Delayed confirmations after PoE toggle
+	private isDestroyed = false // Set in destroy() so background work stops touching a dead instance
+	private connectionGeneration = 0 // Bumped per connection attempt; stale attempts abandon their results
 
 	/**
 	 * Initialize the module instance
+	 *
+	 * IMPORTANT: this must return promptly. Companion aborts init() after 10 seconds
+	 * and kills the module process, which also makes the connection config
+	 * un-editable in the UI. Omada controllers routinely need far longer than that
+	 * just to log in (8s+ is normal on an OC200), so the connection is started in
+	 * the background and its outcome is reported via updateStatus().
 	 */
 	async init(config: ModuleConfig): Promise<void> {
 		this.config = config
-		this.updateStatus(InstanceStatus.Connecting)
+		this.isDestroyed = false
 
 		// Initialize actions and feedbacks
 		this.updateActions()
@@ -30,7 +38,9 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 
 		// Connect to Omada controller if configured
 		if (this.config.host && this.config.username && this.config.password) {
-			await this.initConnection()
+			this.updateStatus(InstanceStatus.Connecting)
+			// Deliberately not awaited - see the note above
+			void this.initConnection()
 		} else {
 			this.updateStatus(InstanceStatus.BadConfig, 'Missing configuration')
 			this.log('warn', 'Module not configured - please configure controller connection')
@@ -39,29 +49,54 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 
 	/**
 	 * Initialize connection to Omada controller
+	 *
+	 * Never call this with `await` from init()/configUpdated() - it performs several
+	 * slow network round-trips and will blow Companion's 10 second RPC deadline.
 	 */
 	async initConnection(): Promise<void> {
+		if (this.isDestroyed) {
+			return
+		}
+
+		// Any attempt still in flight is now stale and will abandon its result
+		const generation = ++this.connectionGeneration
+		const isStale = () => this.isDestroyed || generation !== this.connectionGeneration
+
+		const startedAt = Date.now()
+		const elapsed = () => ((Date.now() - startedAt) / 1000).toFixed(1)
+
 		try {
 			// Create client instance
-			this.client = new OmadaClient(this.config, (level, message) => {
+			const client = new OmadaClient(this.config, (level, message) => {
 				this.log(level, message)
 			})
+			this.client = client
 
 			// Attempt login
-			await this.client.login()
+			await client.login()
+			if (isStale()) {
+				return
+			}
 
 			// Fetch initial device list
 			await this.refreshDevices()
+			if (isStale()) {
+				return
+			}
 
 			// Update status to OK
 			this.updateStatus(InstanceStatus.Ok)
-			this.log('info', 'Connected to Omada controller')
+			this.log('info', `Connected to Omada controller in ${elapsed()}s`)
 
 			// Start polling for device updates
 			this.startPolling()
 		} catch (error) {
 			const err = error as Error
-			this.log('error', `Failed to connect: ${err.message}`)
+			if (isStale()) {
+				return
+			}
+
+			this.log('error', `Failed to connect after ${elapsed()}s: ${err.message}`)
 			this.updateStatus(InstanceStatus.ConnectionFailure, err.message)
 
 			// Schedule reconnection attempt
@@ -76,10 +111,14 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 		if (this.reconnectTimeout) {
 			clearTimeout(this.reconnectTimeout)
 		}
+		if (this.isDestroyed) {
+			return
+		}
 
 		this.reconnectTimeout = setTimeout(() => {
+			this.reconnectTimeout = undefined
 			this.log('info', 'Attempting to reconnect...')
-			this.initConnection()
+			void this.initConnection()
 		}, 30000) // Retry every 30 seconds
 	}
 
@@ -98,23 +137,39 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 		}
 
 		// Poll device list every 10 minutes
+		let deviceListPollBusy = false
 		this.deviceListPollInterval = setInterval(async () => {
+			if (deviceListPollBusy || this.isDestroyed) {
+				return
+			}
+			deviceListPollBusy = true
 			try {
 				await this.refreshDeviceList()
 			} catch (error) {
 				const err = error as Error
 				this.log('warn', `Device list polling error: ${err.message}`)
+			} finally {
+				deviceListPollBusy = false
 			}
 		}, 600000)
 
 		// Poll switch details every 5 seconds (for PoE status)
+		// A full sweep of all switches can take longer than the interval on a slow
+		// controller, so skip a tick rather than stacking overlapping request storms.
+		let switchDetailsPollBusy = false
 		this.switchDetailsPollInterval = setInterval(async () => {
+			if (switchDetailsPollBusy || this.isDestroyed) {
+				return
+			}
+			switchDetailsPollBusy = true
 			try {
 				await this.refreshSwitchDetails()
 			} catch (error) {
 				const err = error as Error
 				this.log('warn', `Switch details polling error: ${err.message}`)
 				// Don't change status here - let it fail multiple times before reconnecting
+			} finally {
+				switchDetailsPollBusy = false
 			}
 		}, 5000)
 	}
@@ -145,12 +200,18 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	 * Refresh device list only (polled every 10 minutes)
 	 */
 	async refreshDeviceList(): Promise<void> {
-		if (!this.client) {
+		// Captured locally: destroy()/configUpdated() can clear this.client while the
+		// request below is still in flight
+		const client = this.client
+		if (!client) {
 			return
 		}
 
 		try {
-			const devices = await this.client.getDevices()
+			const devices = await client.getDevices()
+			if (this.isDestroyed || this.client !== client) {
+				return
+			}
 
 			// Update device cache
 			this.deviceCache.clear()
@@ -174,7 +235,10 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	 * Refresh switch details for PoE status (polled every 5 seconds)
 	 */
 	async refreshSwitchDetails(): Promise<void> {
-		if (!this.client) {
+		// Captured locally: this sweep spans several seconds, and destroy()/configUpdated()
+		// can clear this.client partway through
+		const client = this.client
+		if (!client) {
 			return
 		}
 
@@ -184,12 +248,19 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 
 			// Refresh switch details for all switches
 			for (const sw of switches) {
+				if (this.isDestroyed || this.client !== client) {
+					return
+				}
 				try {
-					const details = await this.client.getSwitchDetails(sw.mac)
+					const details = await client.getSwitchDetails(sw.mac)
 					this.switchDetailsCache.set(sw.mac, details)
 				} catch (error) {
 					this.log('warn', `Failed to get details for switch ${sw.mac}: ${(error as Error).message}`)
 				}
+			}
+
+			if (this.isDestroyed || this.client !== client) {
+				return
 			}
 
 			this.log('debug', `Refreshed PoE status for ${switches.length} switches`)
@@ -286,8 +357,13 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 			// (Omada hardware can be slow, taking 8-12+ seconds to apply PoE changes)
 			const confirmTimeout = setTimeout(async () => {
 				this.log('debug', `Confirming PoE state for port ${portNumber}...`)
+				const client = this.client
+				if (!client || this.isDestroyed) {
+					this.confirmationTimeouts.delete(timeoutKey)
+					return
+				}
 				try {
-					const details = await this.client!.getSwitchDetails(deviceMac)
+					const details = await client.getSwitchDetails(deviceMac)
 					this.switchDetailsCache.set(deviceMac, details)
 					this.checkFeedbacks()
 					this.log('debug', `Confirmed PoE state for port ${portNumber}`)
@@ -311,6 +387,7 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 	 */
 	async destroy(): Promise<void> {
 		this.log('debug', 'Destroying module instance')
+		this.isDestroyed = true
 
 		// Stop polling
 		this.stopPolling()
@@ -318,6 +395,7 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 		// Clear reconnect timeout
 		if (this.reconnectTimeout) {
 			clearTimeout(this.reconnectTimeout)
+			this.reconnectTimeout = undefined
 		}
 
 		// Clear all confirmation timeouts
@@ -326,14 +404,20 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 		}
 		this.confirmationTimeouts.clear()
 
-		// Logout from controller
+		// Logout from controller. Not awaited - it is a best-effort courtesy call to
+		// the controller and must not hold up Companion's destroy deadline.
 		if (this.client) {
-			await this.client.logout()
+			void this.client.logout()
+			this.client = undefined
 		}
 	}
 
 	/**
 	 * Handle configuration updates
+	 *
+	 * Like init(), this must return promptly - Companion applies the same RPC
+	 * deadline here, and blocking on a slow controller would make saving the config
+	 * fail exactly when the user is trying to correct a bad connection setting.
 	 */
 	async configUpdated(config: ModuleConfig): Promise<void> {
 		this.config = config
@@ -342,15 +426,26 @@ export class OmadaModuleInstance extends InstanceBase<ModuleConfig> {
 		this.stopPolling()
 		if (this.reconnectTimeout) {
 			clearTimeout(this.reconnectTimeout)
+			this.reconnectTimeout = undefined
 		}
 
-		// Logout from old connection
+		// Drop the old session without waiting on the network
 		if (this.client) {
-			await this.client.logout()
+			void this.client.logout()
+			this.client = undefined
 		}
 
-		// Re-initialize with new config
-		await this.initConnection()
+		// Clear stale state so feedbacks don't report the previous controller
+		this.deviceCache.clear()
+		this.switchDetailsCache.clear()
+
+		// Re-initialize with new config (deliberately not awaited - see above)
+		if (this.config.host && this.config.username && this.config.password) {
+			this.updateStatus(InstanceStatus.Connecting)
+			void this.initConnection()
+		} else {
+			this.updateStatus(InstanceStatus.BadConfig, 'Missing configuration')
+		}
 	}
 
 	/**

@@ -10,6 +10,7 @@ export interface ModuleConfig {
 	password: string
 	site: string
 	verifySsl: boolean
+	timeout: number // Per-request timeout in seconds
 }
 
 /**
@@ -76,6 +77,17 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			tooltip: 'Disable this for self-signed certificates (common with OC200/OC300)',
 			width: 6,
 			default: false,
+		},
+		{
+			type: 'number',
+			id: 'timeout',
+			label: 'Request Timeout (seconds)',
+			tooltip:
+				'How long to wait for each controller API call. Omada login is slow - 8+ seconds is normal on an OC200 - so keep this well above that.',
+			width: 6,
+			min: 5,
+			max: 120,
+			default: 30,
 		},
 	]
 }
